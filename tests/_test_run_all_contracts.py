@@ -562,7 +562,12 @@ class RunnerContractTests(unittest.TestCase):
 
             table = _proc_process_tree(root)
             self.assertEqual(table, {11: 1, 22: 11, 33: 11})
-            self.assertEqual(_descendants(11, table), [22, 33, 11])
+            got = _descendants(11, table)
+            # 22 / 33 是同一深度的兄弟节点，谁先谁后取决于集合迭代顺序，
+            # 不属于契约（Python 3.12/Linux 给 [33, 22, 11]，3.15/Windows
+            # 给 [22, 33, 11]）。这里钉真正的契约：后代齐全、根节点最后。
+            self.assertEqual(sorted(got), [11, 22, 33], got)
+            self.assertEqual(got[-1], 11, "根节点必须最后：%r" % (got,))
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
