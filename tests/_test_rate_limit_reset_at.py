@@ -41,20 +41,29 @@ import wb_proxy as P          # noqa: E402
 MODEL = "deepseek-v4.1-flash"
 
 # 上游 6004 的真实形状：英文与中文各一（parse_rate_limit_reset 认这两种）。
+#
+# 墙钟必须始终是「未来时刻」：生产代码只认还没到的时刻，把过去的时间
+# 当作过期值丢弃。写死日期会让套件在过了那天之后变成假红（v1.10.1 就
+# 是这样挂的），所以这里按运行时刻往后推 30 天生成同一形状的文案。
+_FUTURE_STAMP = time.strftime("%Y-%m-%d %H:%M:%S",
+                              time.gmtime(time.time() + 30 * 86400))
 DETAIL_EN = ("usage exceeds frequency limit, but don't worry, your usage will "
-             "reset at 2026-11-02 03:04:05 UTC+8")
-DETAIL_CN = "您的使用量已超出频率限制，将在 2026-11-02 03:04:05 UTC+8 重置"
+             "reset at %s UTC+8" % _FUTURE_STAMP)
+DETAIL_CN = "您的使用量已超出频率限制，将在 %s UTC+8 重置" % _FUTURE_STAMP
+# 头/正文的纯函数用例同样不能用已经过去的固定 epoch：生产代码只对还没
+# 到的时刻发头，过去的值一律按「拿不到时刻」处理。
+FUTURE_EPOCH = int(time.time()) + 30 * 86400
 
 
 class HeaderHelperTests(unittest.TestCase):
     """纯函数：头怎么拼，拿不到时刻时怎么退避。"""
 
     def test_both_absolute_headers_are_emitted(self):
-        headers = dict(P.rate_limit_headers(1793600000))
-        self.assertEqual(headers["X-RateLimit-Reset"], "1793600000")
+        headers = dict(P.rate_limit_headers(FUTURE_EPOCH))
+        self.assertEqual(headers["X-RateLimit-Reset"], str(FUTURE_EPOCH))
         self.assertEqual(headers["X-RateLimit-Reset-At"],
                          time.strftime("%Y-%m-%dT%H:%M:%SZ",
-                                       time.gmtime(1793600000)))
+                                       time.gmtime(FUTURE_EPOCH)))
 
     def test_no_instant_means_no_headers(self):
         """宁可不说，也不能编一个恢复时刻出来。"""
@@ -67,8 +76,9 @@ class HeaderHelperTests(unittest.TestCase):
 
     def test_note_is_empty_without_an_instant(self):
         self.assertEqual(P.rate_limit_reset_note(None), "")
-        self.assertIn("resets at 2026-11-02T",
-                      P.rate_limit_reset_note(1793600000))
+        self.assertIn("resets at " + time.strftime("%Y-%m-%dT",
+                                                   time.gmtime(FUTURE_EPOCH)),
+                      P.rate_limit_reset_note(FUTURE_EPOCH))
 
 
 class ResetSourceTests(unittest.TestCase):
