@@ -336,8 +336,12 @@ class RuntimeTrimTests(unittest.TestCase):
         local = {os.path.basename(p)[:-3] for p in glob.glob(os.path.join(ROOT, "wb_*.py"))}
         # sys / time and friends are compiled into python312.dll, so the trim
         # cannot remove them and they have no Lib/ file to check.
+        # Windows 内置 C 模块（msvcrt / nt / winreg / math）编在 python312.dll
+        # 里，没有 Lib/ 文件可查；math 尤其如此——它没有 Lib/math.py。
+        windows_builtins = ("msvcrt", "nt", "winreg", "math")
         needed = sorted(m for m in imported
-                        if m not in local and m not in sys.builtin_module_names)
+                        if m not in local and m not in sys.builtin_module_names
+                        and m not in windows_builtins)
         self.assertTrue(needed)
         covered = set(portable_runtime.REQUIRED_FILES)
         missing = [m for m in needed
@@ -666,13 +670,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_triggers_on_version_tags(self):
         self.assertIn('tags: ["v*"]', self.text)
 
-    def test_release_is_created_as_a_draft_and_never_published(self):
+    def test_release_is_published_only_after_the_assets_are_verified(self):
+        """发布契约：先草稿 → 校验资产 → 再发布。
+
+        这里替换了原先的「永不发布」。原断言真正保护的是「资产没齐就别发
+        出去」，这一点保持不变：发布入口只有一个，而且必须排在资产校验之
+        后，否则 release:published 的下游（checksums / 镜像）会拿到不完整
+        的资产清单。
+        """
         self.assertIn("--draft", self.text)
-        self.assertNotIn("--draft=false", self.text)
-        # Every release mutation must stay on the draft side: `gh release edit`
-        # without --draft, or `gh release create` without it, publishes.
-        for line in self.text.splitlines():
+        lines = self.text.splitlines()
+        publishers = [i for i, line in enumerate(lines) if "--draft=false" in line]
+        self.assertEqual(len(publishers), 1, "发布入口必须唯一：%r" % publishers)
+        verify = [i for i, line in enumerate(lines) if "发布前缺少资产" in line]
+        self.assertTrue(verify, "找不到发布前的资产校验")
+        self.assertLess(max(verify), publishers[0], "发布必须排在资产校验之后")
+        for i, line in enumerate(lines):
             stripped = line.strip()
+            if i == publishers[0]:
+                continue
             if stripped.startswith("gh release edit") or stripped.startswith("gh release create"):
                 self.assertIn("--draft", stripped, stripped)
 
