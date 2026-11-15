@@ -1,0 +1,50 @@
+name: reorder releases
+
+# 重建 release 对象，把 created_at（GitHub 取 tag 的 commit 日期）刷新成
+# 重写后的日期，从而让 releases 页面按版本顺序排列。资产先下载再原样传回，
+# 不做任何重新构建。
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "空格/逗号分隔的 tag 列表，按期望的最终顺序给出"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  reorder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Recreate each release, keeping its assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAGS: ${{ inputs.tags }}
+        run: |
+          set -euo pipefail
+          mkdir -p bodies
+          for T in $(echo "$TAGS" | tr ',' ' '); do
+            [ -n "$T" ] || continue
+            echo "=== $T ==="
+            if gh release view "$T" >/dev/null 2>&1; then
+              gh release view "$T" --json body --jq .body > "bodies/$T.md"
+              mkdir -p "assets/$T"
+              gh release download "$T" --dir "assets/$T" --pattern '*' --clobber
+              gh release delete "$T" --yes --cleanup-tag=false
+              NOTES="bodies/$T.md"
+            else
+              NOTES=""
+            fi
+            if [ -n "$NOTES" ]; then
+              gh release create "$T" --draft --title "$T" --notes-file "$NOTES"
+            else
+              gh release create "$T" --draft --title "$T" --notes ""
+            fi
+            if [ -n "$(ls -A "assets/$T" 2>/dev/null || true)" ]; then
+              gh release upload "$T" "assets/$T"/* --clobber
+            fi
+            gh release edit "$T" --draft=false
+            gh release view "$T" --json isDraft,assets --jq '"  draft=\(.isDraft) assets=\(.assets|length)"'
+          done
