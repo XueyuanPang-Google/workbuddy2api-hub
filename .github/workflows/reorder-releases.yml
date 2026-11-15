@@ -7,8 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: "空格/逗号分隔的 tag 列表"
-        required: true
+        description: "空格/逗号分隔的 tag 列表；留空表示只重建 release 排序"
+        required: false
+      latest:
+        description: "把哪个 tag 标成 Latest（留空则不动）"
+        required: false
 
 permissions:
   contents: write
@@ -25,6 +28,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAGS: ${{ inputs.tags }}
+          LATEST: ${{ inputs.latest }}
         run: |
           set -euo pipefail
           mkdir -p bodies
@@ -46,3 +50,7 @@ jobs:
             gh release edit "$T" --draft=false
             gh release view "$T" --json isDraft,assets --jq '"  draft=\(.isDraft) assets=\(.assets|length)"'
           done
+          if [ -n "${LATEST:-}" ]; then
+            echo "=== mark $LATEST as latest ==="
+            gh release edit "$LATEST" --latest
+          fi
